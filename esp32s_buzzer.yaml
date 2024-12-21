@@ -1,0 +1,50 @@
+esphome:
+  name: button-buzzer
+  platform: esp32
+  board: esp32dev
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.100
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+  ap:
+    ssid: "ButtonBuzzer"
+
+logger:
+
+api:
+
+ota:
+  platform: esphome
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO32  # 按鈕接的腳位
+      mode: INPUT_PULLUP  # 啟用內建上拉電阻
+      inverted: true  # 按下時信號為低電平
+    name: "Button"
+    on_press:
+      - switch.turn_on: buzzer_game_over  # 按下按鈕時啟動蜂鳴器
+    on_release:
+      - switch.turn_off: buzzer_game_over  # 釋放按鈕時關閉蜂鳴器
+
+output:
+  - platform: ledc
+    pin: GPIO4  # 蜂鳴器接的腳位
+    id: buzzer_output
+    frequency: 2000  # 設定頻率為 2000 Hz，這樣蜂鳴器會有聲音
+
+switch:
+  - platform: template
+    name: "Buzzer Game Over"
+    id: buzzer_game_over
+    optimistic: true
+    turn_on_action:
+      - output.turn_on: buzzer_output  # 開啟蜂鳴器
+    turn_off_action:
+      - output.turn_off: buzzer_output  # 關閉蜂鳴器
+    lambda: 'return id(buzzer_output);'

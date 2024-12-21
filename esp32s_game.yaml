@@ -1,0 +1,201 @@
+esphome:
+  name: esp32s-game
+
+esp32:
+  board: nodemcu-32s
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+api:
+  password: ""
+
+ota:
+  - platform: esphome
+    password: ""
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: 192.168.1.100  # 設定靜態IP
+    gateway: 192.168.1.1
+    subnet: 255.255.255.0
+  ap:
+    ssid: "Esp32S Game Fallback Hotspot"
+    password: "VoluJAjPfiLq"
+
+captive_portal:
+
+# === 遊戲相關變數 ===
+globals:
+  - id: game_time_remaining
+    type: int
+    restore_value: no
+    initial_value: "30"  # 倒計時 30 秒
+
+  - id: player_score
+    type: int
+    restore_value: no
+    initial_value: "0"
+
+  - id: game_active
+    type: bool
+    restore_value: no
+    initial_value: "true"  # 遊戲啟動
+
+  - id: target_triggered
+    type: bool
+    restore_value: no
+    initial_value: "false"  # 物體偵測狀態
+
+# === 超音波測距模組 ===
+sensor:
+  - platform: ultrasonic
+    trigger_pin: GPIO16
+    echo_pin: GPIO17
+    name: "Ultrasonic Distance"
+    update_interval: 0.1s
+    on_value_range:
+      below: 10.0  # 當物體距離小於 10 公分
+      then:
+        - if:
+            condition:
+              lambda: "return id(game_active) == true;"
+            then:
+              - logger.log: "Object detected! Triggering target."
+              - globals.set:
+                  id: target_triggered
+                  value: "true"
+              - rtttl.play: "SuperMario:d=4,o=5,b=140:e8,e8,e8,c8,e8,g8"  # 播放音樂
+              - component.update: oled_id  # 更新OLED顯示
+
+# === OLED 顯示器 ===
+i2c:
+  sda: 21
+  scl: 22
+  frequency: 800kHz
+
+display:
+  - platform: ssd1306_i2c
+    id: oled_id
+    model: "SSD1306 128x64"
+    address: 0x3C
+    update_interval: 1s
+    lambda: |-
+      if (id(game_active)) {
+        it.printf(0, 0, id(font_arial_20), "Time: %d s", id(game_time_remaining));
+        it.printf(0, 20, id(font_arial_20), "Score: %d", id(player_score));
+        if (id(target_triggered)) {
+          it.printf(0, 40, id(font_arial_20), "Press Button!");
+        }
+      } else {
+        it.printf(0, 0, id(font_arial_24), "Game Over!");
+        it.printf(0, 30, id(font_arial_20), "Final Score:");
+        it.printf(0, 50, id(font_arial_20), "%d", id(player_score));
+      }
+
+font:
+  - file: 'fonts/arial.ttf'
+    id: font_arial_24
+    size: 24
+  - file: 'fonts/arial.ttf'
+    id: font_arial_20
+    size: 20
+
+# === 蜂鳴器 ===
+output:
+  - platform: ledc
+    pin: GPIO4  # 蜂鳴器接的腳位
+    id: buzzer_output
+    frequency: 2000  # 設定頻率為 2000 Hz，這樣蜂鳴器會有聲音
+
+switch:
+  - platform: template
+    name: "Buzzer Game Over"
+    id: buzzer_game_over
+    optimistic: true
+    turn_on_action:
+      - output.turn_on: buzzer_output  # 開啟蜂鳴器
+    turn_off_action:
+      - output.turn_off: buzzer_output  # 關閉蜂鳴器
+    lambda: 'return id(buzzer_output);'
+
+# === 手觸按鍵 ===
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO32  # 手觸按鍵接的腳位
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Player Button"
+    on_press:
+      - if:
+          condition:
+            and:
+              - lambda: "return id(game_active) == true;"
+              - lambda: "return id(target_triggered) == true;"
+          then:
+            - logger.log: "Correct! Adding Score."
+            - globals.set:
+                id: player_score
+                value: !lambda "return id(player_score) + 1;"
+            - globals.set:
+                id: target_triggered
+                value: "false"
+            - component.update: oled_id  # 更新OLED顯示
+          else:
+            - logger.log: "Press ignored or wrong timing."
+
+# === 重置遊戲 ===
+  - platform: gpio
+    pin:
+      number: GPIO12
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Reset Game Button"
+    on_press:
+      - logger.log: "Resetting the game."
+      - globals.set:
+          id: game_time_remaining
+          value: "30"  # 重置倒計時為30秒
+      - globals.set:
+          id: player_score
+          value: "0"  # 重置分數為0
+      - globals.set:
+          id: game_active
+          value: "true"  # 启动游戏
+      - globals.set:
+          id: target_triggered
+          value: "false"  # 目标状态重置
+      - component.update: oled_id  # 更新OLED显示
+
+# === 遊戲邏輯與倒計時 ===
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: "return id(game_active) == true;"
+              - lambda: "return id(game_time_remaining) > 0;"
+          then:
+            - lambda: |-
+                id(game_time_remaining)--;
+                ESP_LOGD("GAME", "Time Remaining: %d", id(game_time_remaining));
+            - component.update: oled_id  # 更新OLED顯示
+          else:
+            - logger.log: "Game Over!"
+            - globals.set:
+                id: game_active
+                value: "false"  # 停止遊戲
+            - component.update: oled_id  # 更新OLED顯示
+            - output.turn_off: buzzer_output  # 停止蜂鳴器
+
+# === RTTTL 設定 ===
+rtttl:
+  output: buzzer_output
+  on_finished_playback:
+    - logger.log: 'Playback Finished!'
